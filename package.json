@@ -1,10 +1,19 @@
 {
-  "version": "0.0.1",
+  "version": "1.0.0",
+  "engines": {
+    "node": "10.14.1"
+  },
   "main": "scraper.js",
   "dependencies": {
-    "cheerio": "latest",
-    "request": "latest",
-    "sqlite3": "latest"
+    "cheerio": "^1.0.0-rc.2",
+    "didyoumean2": "^2.0.0",
+    "fs": "0.0.1-security",
+    "jimp": "^0.6.0",
+    "moment": "^2.22.2",
+    "request": "^2.88.0",
+    "request-promise-native": "^1.0.5",
+    "sqlite3": "^4.0.4",
+    "tesseract.js": "^1.0.14"
   },
   "keywords": [
     "scraper",
