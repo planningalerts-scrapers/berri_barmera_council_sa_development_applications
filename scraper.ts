@@ -12,10 +12,11 @@ import * as request from "request-promise-native";
 import * as sqlite3 from "sqlite3";
 import * as moment from "moment";
 import * as didyoumean from "didyoumean2";
+import * as urlparser from "url";
 
 sqlite3.verbose();
 
-const DevelopmentApplicationsUrl = "http://www.berribarmera.sa.gov.au/page.aspx?u=375"
+const DevelopmentApplicationsUrl = "http://www.berribarmera.sa.gov.au/page.aspx?u=375";
 const CommentUrl = "mailto:bbc@bbc.sa.gov.au";
 
 declare const process: any;
@@ -98,9 +99,55 @@ async function main() {
 
     let database = await initializeDatabase();
 
+    // Read the main page of development applications.
+
+    let body = await request({ url: DevelopmentApplicationsUrl, rejectUnauthorized: false, proxy: process.env.MORPH_PROXY });
+//    await sleep(2000 + getRandom(0, 5) * 1000);
+    let $ = cheerio.load(body);
+
+    let pdfUrls: string[] = [];
+    for (let element of $("div.u6ListItem a").get()) {
+        let pdfUrl = new urlparser.URL(element.attribs.href, DevelopmentApplicationsUrl).href
+        if (!pdfUrls.some(url => url === pdfUrl))
+            pdfUrls.push(pdfUrl);
+    }
+
+    for (let pdfUrl of pdfUrls)
+        console.log(pdfUrl);
+
+    // Obtain the PDF URLs from the previous years pages.
+
+    let yearUrls: string[] = [];
+    for (let element of $("div.unityHtmlArticle h4 a").get()) {
+        let pdfUrl = new urlparser.URL(element.attribs.href, DevelopmentApplicationsUrl).href
+        if (!yearUrls.some(url => url === pdfUrl))
+            yearUrls.push(pdfUrl);
+    }
+
+    for (let yearUrl of yearUrls) {
+        body = await request({ url: yearUrl, rejectUnauthorized: false, proxy: process.env.MORPH_PROXY });
+//        await sleep(2000 + getRandom(0, 5) * 1000);
+        $ = cheerio.load(body);
+
+        let elements = []
+            .concat($("td.uContentListDesc p a").get())
+            .concat($("td.u6ListTD div.u6ListItem a").get())
+            .concat($("div.unityHtmlArticle p a").get());
+
+        for (let element of elements) {
+            let pdfUrl = new urlparser.URL(element.attribs.href, DevelopmentApplicationsUrl).href
+            if (!pdfUrls.some(url => url === pdfUrl))
+                pdfUrls.push(pdfUrl);
+        }
+    }
+
+    console.log("----------");
+    for (let pdfUrl of pdfUrls)
+        console.log(pdfUrl);
+
     // Parse a PDF file.
 
-    await parsePdf(database, database);
+    // await parsePdf(pdfUrl, database);
 }
 
 main().then(() => console.log("Complete.")).catch(error => console.error(error));
