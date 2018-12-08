@@ -23,7 +23,7 @@ import * as moment from "moment";
 import * as pdfjs from "pdfjs-dist";
 import * as tesseract from "tesseract.js";
 import * as jimp from "jimp";
-import * as didyoumean from "didyoumean2";
+import didYouMean, * as didyoumean from "didyoumean2";
 
 sqlite3.verbose();
 
@@ -84,16 +84,26 @@ interface Rectangle {
     height: number
 }
 
-// Gets a random integer in the specified range: [minimum, maximum).
+// An element (consisting of text and a bounding rectangle) in a PDF document.
 
-function getRandom(minimum: number, maximum: number) {
-    return Math.floor(Math.random() * (Math.floor(maximum) - Math.ceil(minimum))) + Math.ceil(minimum);
+interface Element extends Rectangle {
+    text: string,
+    confidence: number
 }
 
-// Pauses for the specified number of milliseconds.
+// Gets the highest Y co-ordinate of all elements that are considered to be in the same row as
+// the specified element.  Take care to avoid extremely tall elements (because these may otherwise
+// be considered as part of all rows and effectively force the return value of this function to
+// the same value, regardless of the value of startElement).
 
-function sleep(milliseconds: number) {
-    return new Promise(resolve => setTimeout(resolve, milliseconds));
+function getRowTop(elements: Element[], startElement: Element) {
+    let top = startElement.y;
+    for (let element of elements)
+        if (element.y < startElement.y + startElement.height && element.y + element.height > startElement.y)  // check for overlap
+            if (getVerticalOverlapPercentage(startElement, element) > 50)  // avoids extremely tall elements
+                if (element.y < top)
+                    top = element.y;
+    return top;
 }
 
 // Converts image data from the PDF to a jimp format image.
@@ -283,7 +293,6 @@ async function parseImage(image: any, bounds: Rectangle) {
     // Convert the image data into a format that can be used by jimp and then segment the image
     // based on blocks of white.
 
-    // let segments = segmentImage(convertToJimpImage(image));
     let segments = segmentImage(convertToJimpImage(image));
     if (global.gc)
         global.gc();
@@ -291,13 +300,6 @@ async function parseImage(image: any, bounds: Rectangle) {
     let elements: Element[] = [];
     for (let segment of segments) {
         // Attempt to avoid using too much memory by scaling down large images.
-
-        let scaleFactor = 1.0;
-        if (segment.bounds.width * segment.bounds.height > 1000 * 1000) {
-            scaleFactor = 0.5;
-            console.log(`    Scaling a large image (${segment.bounds.width}×${segment.bounds.height}) by ${scaleFactor} to reduce memory usage.`);
-            segment.image = segment.image.scale(scaleFactor, jimp.RESIZE_BEZIER);
-        }
 
         let imageBuffer = await new Promise((resolve, reject) => segment.image.getBuffer(jimp.MIME_PNG, (error, buffer) => error ? reject(error) : resolve(buffer)));
         segment.image = undefined;  // attempt to release memory
@@ -310,10 +312,7 @@ async function parseImage(image: any, bounds: Rectangle) {
         if (segment.bounds.width * segment.bounds.height > 700 * 700)
             console.log(`    Parsing a large image with bounds { x: ${Math.round(segment.bounds.x)}, y: ${Math.round(segment.bounds.y)}, width: ${Math.round(segment.bounds.width)}, height: ${Math.round(segment.bounds.height)} }.`);
 
-        // Note that textord_old_baselines is set to 0 so that text that is offset by half the
-        // height of the the font is correctly recognised.
-
-        let result: any = await new Promise((resolve, reject) => { tesseract.recognize(imageBuffer, { textord_old_baselines: "0" }).then(function(result) { resolve(result); }) });
+        let result: any = await new Promise((resolve, reject) => { tesseract.recognize(imageBuffer, { }).then(function(result) { resolve(result); }) });
         tesseract.terminate();
         if (global.gc)
             global.gc();
@@ -329,18 +328,116 @@ async function parseImage(image: any, bounds: Rectangle) {
                                 text: word.text,
                                 confidence: word.confidence,
                                 choiceCount: word.choices.length,
-                                x: bounds.x + segment.bounds.x + word.bbox.x0 / scaleFactor,
-                                y: bounds.y + segment.bounds.y + word.bbox.y0 / scaleFactor,
-                                width: (word.bbox.x1 - word.bbox.x0) / scaleFactor,
-                                height: (word.bbox.y1 - word.bbox.y0) / scaleFactor
+                                x: bounds.x + segment.bounds.x + word.bbox.x0,
+                                y: bounds.y + segment.bounds.y + word.bbox.y0,
+                                width: (word.bbox.x1 - word.bbox.x0),
+                                height: (word.bbox.y1 - word.bbox.y0)
                             };
                         }));
     }
-console.log(elements);
+
     return elements;
 }
 
+// Calculates the square of the Euclidean distance between two elements.
+
+function calculateDistance(element1: Element, element2: Element) {
+    let point1 = { x: element1.x + element1.width, y: element1.y + element1.height / 2 };
+    let point2 = { x: element2.x, y: element2.y + element2.height / 2 };
+    if (point2.x < point1.x - element1.width / 5)  // arbitrary overlap factor of 20% (ie. ignore elements that overlap too much in the horizontal direction)
+        return Number.MAX_VALUE;
+    return (point2.x - point1.x) * (point2.x - point1.x) + (point2.y - point1.y) * (point2.y - point1.y);
+}
+
+// Determines whether there is vertical overlap between two elements.
+
+function isVerticalOverlap(element1: Element, element2: Element) {
+    return element2.y < element1.y + element1.height && element2.y + element2.height > element1.y;
+}
+
+// Gets the percentage of vertical overlap between two elements (0 means no overlap and 100 means
+// 100% overlap; and, for example, 20 means that 20% of the second element overlaps somewhere
+// with the first element).
+
+function getVerticalOverlapPercentage(element1: Element, element2: Element) {
+    let y1 = Math.max(element1.y, element2.y);
+    let y2 = Math.min(element1.y + element1.height, element2.y + element2.height);
+    return (y2 < y1) ? 0 : (((y2 - y1) * 100) / element2.height);
+}
+
+// Gets the element immediately to the right of the specified element (but ignores elements that
+// appear after a large horizontal gap).
+
+function getRightElement(elements: Element[], element: Element) {
+    let closestElement: Element = { text: undefined, confidence: 0, x: Number.MAX_VALUE, y: Number.MAX_VALUE, width: 0, height: 0 };
+    for (let rightElement of elements)
+        if (isVerticalOverlap(element, rightElement) &&  // ensure that there is at least some vertical overlap
+            getVerticalOverlapPercentage(element, rightElement) > 50 &&  // avoid extremely tall elements (ensure at least 50% overlap)
+            (rightElement.x > element.x + element.width) &&  // ensure the element actually is to the right
+            (rightElement.x - (element.x + element.width) < 30) &&  // avoid elements that appear after a large gap (arbitrarily ensure less than a 30 pixel gap horizontally)
+            calculateDistance(element, rightElement) < calculateDistance(element, closestElement))  // check if closer than any element encountered so far
+            closestElement = rightElement;
+    return (closestElement.text === undefined) ? undefined : closestElement;
+}
+
+// Finds the start element of each development application on the current PDF page (there are
+// typically two development applications on a single page and each development application
+// typically begins with the text "Application No").
+
+function findStartElements(elements: Element[]) {
+    // Examine all the elements on the page that being with "A" or "a".
+    
+    let startElements: Element[] = [];
+    for (let element of elements.filter(element => element.text.trim().toLowerCase().startsWith("a"))) {
+        // Extract up to 5 elements to the right of the element that has text starting with the
+        // letter "a" (and so may be the start of the "Application No" text).  Join together the
+        // elements to the right in an attempt to find the best match to the text "Application No".
+
+        let rightElement = element;
+        let rightElements: Element[] = [];
+        let matches = [];
+
+        do {
+            rightElements.push(rightElement);
+        
+            // Allow for common misspellings of the "no." text.
+
+            let text = rightElements.map(element => element.text).join("").replace(/[\s,\-_]/g, "").replace(/n0/g, "no").replace(/n°/g, "no").replace(/"o/g, "no").replace(/"0/g, "no").replace(/"°/g, "no").replace(/“°/g, "no").toLowerCase();
+            if (text.length >= 16)  // stop once the text is too long
+                break;
+            if (text.length >= 13) {  // ignore until the text is close to long enough
+                if (text === "applicationno")
+                    matches.push({ element: rightElement, threshold: 0 });
+                else if (didYouMean(text, [ "ApplicationNo" ], { caseSensitive: false, returnType: didyoumean.ReturnTypeEnums.FIRST_CLOSEST_MATCH, thresholdType: didyoumean.ThresholdTypeEnums.EDIT_DISTANCE, threshold: 1, trimSpaces: true }) !== null)
+                    matches.push({ element: rightElement, threshold: 1 });
+                else if (didYouMean(text, [ "ApplicationNo" ], { caseSensitive: false, returnType: didyoumean.ReturnTypeEnums.FIRST_CLOSEST_MATCH, thresholdType: didyoumean.ThresholdTypeEnums.EDIT_DISTANCE, threshold: 2, trimSpaces: true }) !== null)
+                    matches.push({ element: rightElement, threshold: 2 });
+            }
+
+            rightElement = getRightElement(elements, rightElement);
+        } while (rightElement !== undefined && rightElements.length < 5);  // up to 5 elements
+
+        // Chose the best match (if any matches were found).
+
+        if (matches.length > 0) {
+            let bestMatch = matches.reduce((previous, current) =>
+                (previous === undefined ||
+                previous.threshold < current.threshold ||
+                (previous.threshold === current.threshold && Math.abs(previous.text.length - "ApplicationNo".length) <= Math.abs(current.text.length - "ApplicationNo".length)) ? current : previous), undefined);
+            startElements.push(bestMatch.element);
+        }
+    }
+
+    // Ensure the start elements are sorted in the order that they appear on the page.
+
+    let yComparer = (a, b) => (a.y > b.y) ? 1 : ((a.y < b.y) ? -1 : 0);
+    startElements.sort(yComparer);
+    return startElements;
+}
+
 // Parses the development applications in the specified date range.
+
+let imageCount = 0;
 
 async function parsePdf(url: string) {
     console.log(`Reading development applications from ${url}.`);
@@ -368,7 +465,7 @@ async function parsePdf(url: string) {
         let viewport = await page.getViewport(1.0);
         let operators = await page.getOperatorList();
 
-        // Ensure that the page is not rotated.
+        // Report any page rotation (for troubleshooting purposes).
 
         console.log(`Page ${pageIndex + 1} is rotated ${page.rotate}°.`);
 
@@ -401,9 +498,7 @@ async function parsePdf(url: string) {
                 continue;
 
             // Use the transform to translate the X and Y co-ordinates, but assume that the width
-            // and height are consistent between all images and do not need to be scaled.  This is
-            // almost always the case; only the first image is sometimes an exception (with a
-            // scale factor of 2.083333 instead of 4.166666).
+            // and height are consistent between all images and do not need to be scaled.
 
             let bounds: Rectangle = {
                 x: (transform[4] * image.height) / transform[3],
@@ -426,52 +521,44 @@ async function parsePdf(url: string) {
         if (global.gc)
             global.gc();
 
-    //     // Ignore extremely low height elements (because these can be parsed as text but are
-    //     // very unlikely to actually be text; for example see the October 2016 PDF on page 19).
-    //     // In some rare cases they may be valid (such as a full stop far from other text).
+        // Ignore extremely low height elements (because these can be parsed as text but are
+        // very unlikely to actually be text).
 
-    //     elements = elements.filter(element => element.height > 2);
+        elements = elements.filter(element => element.height > 2);
 
-    //     // Sort the elements by Y co-ordinate and then by X co-ordinate.
+        // Sort the elements by Y co-ordinate and then by X co-ordinate.
 
-    //     let elementComparer = (a, b) => (a.y > b.y) ? 1 : ((a.y < b.y) ? -1 : ((a.x > b.x) ? 1 : ((a.x < b.x) ? -1 : 0)));
-    //     elements.sort(elementComparer);
+        let elementComparer = (a, b) => (a.y > b.y) ? 1 : ((a.y < b.y) ? -1 : ((a.x > b.x) ? 1 : ((a.x < b.x) ? -1 : 0)));
+        elements.sort(elementComparer);
 
-    //     // Group the elements into sections based on where the "Dev App No." text starts (and
-    //     // any other element the "Dev App No." elements line up with horizontally with a margin
-    //     // of error equal to about the height of the "Dev App No." text; this is done in order
-    //     // to capture the lodged date, which may be higher up than the "Dev App No." text).
+        // Group the elements into sections based on where the "Application No" text starts.
 
-    //     let applicationElementGroups = [];
-    //     let startElements = findStartElements(elements);
-    //     for (let index = 0; index < startElements.length; index++) {
-    //         // Determine the highest Y co-ordinate of this row and the next row (or the bottom of
-    //         // the current page).  Allow some leeway vertically (add some extra height) because
-    //         // in some cases the lodged date is a fair bit higher up than the "Dev App No." text
-    //         // (see the similar leeway used in getReceivedDate).
+        let applicationElementGroups = [];
+        let startElements = findStartElements(elements);
+        for (let index = 0; index < startElements.length; index++) {
+            // Determine the highest Y co-ordinate of this row and the next row (or the bottom of
+            // the current page).  Allow some leeway vertically (add some extra height) because
+            // in some cases the lodged date is a fair bit higher up than the "Dev App No." text
+            // (see the similar leeway used in getReceivedDate).
             
-    //         let startElement = startElements[index];
-    //         let raisedStartElement: Element = {
-    //             text: startElement.text,
-    //             confidence: startElement.confidence,
-    //             x: startElement.x,
-    //             y: startElement.y - 3 * startElement.height,  // leeway
-    //             width: startElement.width,
-    //             height: startElement.height };
-    //         let rowTop = getRowTop(elements, raisedStartElement);
-    //         let nextRowTop = (index + 1 < startElements.length) ? getRowTop(elements, startElements[index + 1]) : Number.MAX_VALUE;
+            let startElement = startElements[index];
+            let raisedStartElement: Element = {
+                text: startElement.text,
+                confidence: startElement.confidence,
+                x: startElement.x,
+                y: startElement.y - startElement.height / 2,  // leeway
+                width: startElement.width,
+                height: startElement.height };
+            let rowTop = getRowTop(elements, raisedStartElement);
+            let nextRowTop = (index + 1 < startElements.length) ? getRowTop(elements, startElements[index + 1]) : Number.MAX_VALUE;
 
-    //         // Extract all elements between the two rows.
+            // Extract all elements between the two rows.
 
-    //         applicationElementGroups.push({ startElement: startElements[index], elements: elements.filter(element => element.y >= rowTop && element.y + element.height < nextRowTop) });
-    //     }
+            applicationElementGroups.push({ startElement: startElements[index], elements: elements.filter(element => element.y >= rowTop && element.y + element.height < nextRowTop) });
+        }
 
-    //     // The first page typically has a record count which can be used to determine if all
-    //     // applications are successfully parsed later (although sometimes this record count
-    //     // itself is innaccurate).
-
-    //     if (pageIndex === 0 && startElements.length >= 1)  // first page
-    //         recordCount = getRecordCount(elements, startElements[0]);
+imageCount++;
+fs.writeFileSync(`C:\\Temp\\Berri Barmera\\Images\\ElementGroups.${imageCount}.txt`, JSON.stringify(applicationElementGroups));
 
     //     // Parse the development application from each group of elements (ie. a section of the
     //     // current page of the PDF document).  If the same application number is encountered a
@@ -492,20 +579,6 @@ async function parsePdf(url: string) {
     //     }
     }
 
-    // // Check whether the expected number of development applications have been encountered.
-
-    // if (recordCount !== -1) {
-    //     let recordCountDiscrepancy = recordCount - developmentApplications.length;
-    //     if (recordCountDiscrepancy <= -2)
-    //         console.log(`Warning: ${-recordCountDiscrepancy} extra records were extracted from the PDF (record count at start of PDF: ${recordCount}; extracted application count: ${developmentApplications.length}).`);
-    //     else if (recordCountDiscrepancy == -1)
-    //         console.log(`Warning: 1 extra record was extracted from the PDF (record count at start of PDF: ${recordCount}; extracted application count: ${developmentApplications.length}).`);
-    //     else if (recordCountDiscrepancy == 1)
-    //         console.log(`Warning: 1 record was not extracted from the PDF (record count at start of PDF: ${recordCount}; extracted application count: ${developmentApplications.length}).`);
-    //     else if (recordCountDiscrepancy >= 2)
-    //         console.log(`Warning: ${recordCountDiscrepancy} records were not extracted from the PDF (record count at start of PDF: ${recordCount}; extracted application count: ${developmentApplications.length}).`);
-    // }
-
     // return developmentApplications;
     
     // await insertRow(database, {
@@ -519,6 +592,18 @@ async function parsePdf(url: string) {
     // });
 
     return [];
+}
+
+// Gets a random integer in the specified range: [minimum, maximum).
+
+function getRandom(minimum: number, maximum: number) {
+    return Math.floor(Math.random() * (Math.floor(maximum) - Math.ceil(minimum))) + Math.ceil(minimum);
+}
+
+// Pauses for the specified number of milliseconds.
+
+function sleep(milliseconds: number) {
+    return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
 // Parses the development applications.
@@ -554,7 +639,7 @@ async function main() {
 
     for (let yearUrl of yearUrls) {
         body = await request({ url: yearUrl, rejectUnauthorized: false, proxy: process.env.MORPH_PROXY });
-//        await sleep(2000 + getRandom(0, 5) * 1000);
+        await sleep(2000 + getRandom(0, 5) * 1000);
         $ = cheerio.load(body);
 
         let elements = []
@@ -606,8 +691,6 @@ selectedPdfUrls = [ "http://www.berribarmera.sa.gov.au/webdata/resources/files/A
         for (let developmentApplication of developmentApplications)
             await insertRow(database, developmentApplication);
     }
-
-    // await parsePdf(pdfUrl, database);
 }
 
 main().then(() => console.log("Complete.")).catch(error => console.error(error));
