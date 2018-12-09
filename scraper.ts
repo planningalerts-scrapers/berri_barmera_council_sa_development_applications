@@ -317,7 +317,10 @@ async function parseImage(image: any, bounds: Rectangle) {
         if (segment.bounds.width * segment.bounds.height > 700 * 700)
             console.log(`    Parsing a large image with bounds { x: ${Math.round(segment.bounds.x)}, y: ${Math.round(segment.bounds.y)}, width: ${Math.round(segment.bounds.width)}, height: ${Math.round(segment.bounds.height)} }.`);
 
-        let result: any = await new Promise((resolve, reject) => { tesseract.recognize(imageBuffer, { }).then(function(result) { resolve(result); }) });
+        // Note that textord_old_baselines is set to 0 so that text that is offset by half the
+        // height of the the font is correctly recognised.
+
+        let result: any = await new Promise((resolve, reject) => { tesseract.recognize(imageBuffer, { textord_old_baselines: "0" }).then(function(result) { resolve(result); }) });
         tesseract.terminate();
         if (global.gc)
             global.gc();
@@ -545,7 +548,7 @@ function parseApplicationElements(elements: Element[], startElement: Element, in
     // Get the application number.
 
     let applicationNumber = getRightText(elements, "Application No", "Application Date", "Applicants Name");
-    if (applicationNumber === "") {
+    if (applicationNumber === undefined || applicationNumber === "") {
         let elementSummary = elements.map(element => `[${element.text}]`).join("");
         console.log(`Could not find the application number on the PDF page for the current development application.  The development application will be ignored.  Elements: ${elementSummary}`);
         return undefined;
