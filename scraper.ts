@@ -401,6 +401,59 @@ function getRightElement(elements: Element[], element: Element) {
     return (closestElement.text === undefined) ? undefined : closestElement;
 }
 
+// Finds the element that most closely matches the specified text.
+
+function findElement(elements: Element[], text: string, shouldSelectRightmostElement: boolean) {
+    // Examine all the elements on the page that being with the same character as the requested
+    // text.
+    
+    let condensedText = text.replace(/[\s,\-_]/g, "").toLowerCase();
+    let firstCharacter = condensedText.charAt(0);
+
+    let matches = [];
+    for (let element of elements.filter(element => element.text.trim().toLowerCase().startsWith(firstCharacter))) {
+        // Extract up to 5 elements to the right of the element that has text starting with the
+        // required character (and so may be the start of the requested text).  Join together the
+        // elements to the right in an attempt to find the best match to the text.
+
+        let rightElement = element;
+        let rightElements: Element[] = [];
+
+        do {
+            rightElements.push(rightElement);
+
+            let currentText = rightElements.map(element => element.text).join("").replace(/[\s,\-_]/g, "").toLowerCase();
+
+            if (currentText.length > text.length + 2)  // stop once the text is too long
+                break;
+            if (currentText.length >= text.length - 2) {  // ignore until the text is close to long enough
+                if (currentText === condensedText)
+                    matches.push({ leftElement: rightElements[0], rightElement: rightElement, threshold: 0, text: currentText });
+                else if (didYouMean(currentText, [ condensedText ], { caseSensitive: false, returnType: didyoumean.ReturnTypeEnums.FIRST_CLOSEST_MATCH, thresholdType: didyoumean.ThresholdTypeEnums.EDIT_DISTANCE, threshold: 1, trimSpaces: true }) !== null)
+                    matches.push({ leftElement: rightElements[0], rightElement: rightElement, threshold: 1, text: currentText });
+                else if (didYouMean(currentText, [ condensedText ], { caseSensitive: false, returnType: didyoumean.ReturnTypeEnums.FIRST_CLOSEST_MATCH, thresholdType: didyoumean.ThresholdTypeEnums.EDIT_DISTANCE, threshold: 2, trimSpaces: true }) !== null)
+                    matches.push({ leftElement: rightElements[0], rightElement: rightElement, threshold: 2, text: currentText });
+            }
+
+            rightElement = getRightElement(elements, rightElement);
+        } while (rightElement !== undefined && rightElements.length < 5);  // up to 5 elements
+    }
+
+    // Chose the best match (if any matches were found).
+
+    if (matches.length > 0) {
+console.log(condensedText);
+console.log(matches);
+        let bestMatch = matches.reduce((previous, current) =>
+            (previous === undefined ||
+            previous.threshold < current.threshold ||
+            (previous.threshold === current.threshold && Math.abs(previous.text.length - condensedText.length) <= Math.abs(current.text.length - condensedText.length)) ? current : previous), undefined);
+        return shouldSelectRightmostElement ? bestMatch.rightElement : bestMatch.leftElement;
+    }
+
+    return undefined;
+}
+
 // Finds the start element of each development application on the current PDF page (there are
 // typically two development applications on a single page and each development application
 // typically begins with the text "Application No").
@@ -428,11 +481,11 @@ function findStartElements(elements: Element[]) {
                 break;
             if (text.length >= 13) {  // ignore until the text is close to long enough
                 if (text === "applicationno")
-                    matches.push({ element: rightElement, threshold: 0 });
+                    matches.push({ element: rightElement, threshold: 0, text: text });
                 else if (didYouMean(text, [ "ApplicationNo" ], { caseSensitive: false, returnType: didyoumean.ReturnTypeEnums.FIRST_CLOSEST_MATCH, thresholdType: didyoumean.ThresholdTypeEnums.EDIT_DISTANCE, threshold: 1, trimSpaces: true }) !== null)
-                    matches.push({ element: rightElement, threshold: 1 });
+                    matches.push({ element: rightElement, threshold: 1, text: text });
                 else if (didYouMean(text, [ "ApplicationNo" ], { caseSensitive: false, returnType: didyoumean.ReturnTypeEnums.FIRST_CLOSEST_MATCH, thresholdType: didyoumean.ThresholdTypeEnums.EDIT_DISTANCE, threshold: 2, trimSpaces: true }) !== null)
-                    matches.push({ element: rightElement, threshold: 2 });
+                    matches.push({ element: rightElement, threshold: 2, text: text });
             }
 
             rightElement = getRightElement(elements, rightElement);
@@ -463,9 +516,9 @@ function getRightText(elements: Element[], topLeftText: string, rightText: strin
     // Construct a bounding rectangle in which the expected text should appear.  Any elements
     // over 50% within the bounding rectangle will be assumed to be part of the expected text.
 
-    let topLeftElement = elements.find(element => element.text.trim() == topLeftText);
-    let rightElement = (rightText === undefined) ? undefined : elements.find(element => element.text.trim() == rightText);
-    let bottomElement = (bottomText === undefined) ? undefined: elements.find(element => element.text.trim() == bottomText);
+    let topLeftElement = findElement(elements, topLeftText, true);
+    let rightElement = (rightText === undefined) ? undefined : findElement(elements, rightText, false);
+    let bottomElement = (bottomText === undefined) ? undefined : findElement(elements, bottomText, false);
     if (topLeftElement === undefined)
         return undefined;
 
@@ -506,9 +559,9 @@ function getDownText(elements: Element[], topText: string, rightText: string, bo
     // Construct a bounding rectangle in which the expected text should appear.  Any elements
     // over 50% within the bounding rectangle will be assumed to be part of the expected text.
 
-    let topElement = elements.find(element => element.text.trim() == topText);
-    let rightElement = (rightText === undefined) ? undefined : elements.find(element => element.text.trim() == rightText);
-    let bottomElement = (bottomText === undefined) ? undefined: elements.find(element => element.text.trim() == bottomText);
+    let topElement = findElement(elements, topText, true);
+    let rightElement = (rightText === undefined) ? undefined : findElement(elements, rightText, false);
+    let bottomElement = (bottomText === undefined) ? undefined: findElement(elements, bottomText, false);
     if (topElement === undefined)
         return undefined;
 
@@ -553,6 +606,7 @@ function parseApplicationElements(elements: Element[], startElement: Element, in
         console.log(`Could not find the application number on the PDF page for the current development application.  The development application will be ignored.  Elements: ${elementSummary}`);
         return undefined;
     }
+    applicationNumber = applicationNumber.replace(/[Il,]/g, "/");
     console.log(`    Found \"${applicationNumber}\".`);
 
     // Get the received date.
@@ -704,7 +758,7 @@ function parseApplicationElements(elements: Element[], startElement: Element, in
     return {
         applicationNumber: applicationNumber,
         address: address,
-        description: ((description === "") ? "NO DESCRIPTION PROVIDED" : description),
+        description: ((description === "") ? "No Description Provided" : description),
         informationUrl: informationUrl,
         commentUrl: CommentUrl,
         scrapeDate: moment().format("YYYY-MM-DD"),
