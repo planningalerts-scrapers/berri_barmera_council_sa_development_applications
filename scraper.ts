@@ -662,7 +662,7 @@ async function main() {
             pdfUrls.push(pdfUrl);
     }
 
-    // Obtain the PDF URLs from the previous years pages.
+    // Obtain the PDF URLs from the previous years' pages.
 
     let yearUrls: string[] = [];
     for (let element of $("div.unityHtmlArticle h4 a").get()) {
