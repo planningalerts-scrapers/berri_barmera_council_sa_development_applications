@@ -33,7 +33,7 @@ async function initializeDatabase() {
     return new Promise((resolve, reject) => {
         let database = new sqlite3.Database("data.sqlite");
         database.serialize(() => {
-            database.run("create table if not exists [data] ([council_reference] text primary key, [address] text, [description] text, [info_url] text, [comment_url] text, [date_scraped] text, [date_received] text)");
+            database.run("create table if not exists [data] ([council_reference] text primary key, [address] text, [description] text, [info_url] text, [comment_url] text, [date_scraped] text, [date_received] text, [legal_description] text)");
             resolve(database);
         });
     });
@@ -43,7 +43,7 @@ async function initializeDatabase() {
 
 async function insertRow(database, developmentApplication) {
     return new Promise((resolve, reject) => {
-        let sqlStatement = database.prepare("insert or ignore into [data] values (?, ?, ?, ?, ?, ?, ?)");
+        let sqlStatement = database.prepare("insert or ignore into [data] values (?, ?, ?, ?, ?, ?, ?, ?)");
         sqlStatement.run([
             developmentApplication.applicationNumber,
             developmentApplication.address,
@@ -51,16 +51,17 @@ async function insertRow(database, developmentApplication) {
             developmentApplication.informationUrl,
             developmentApplication.commentUrl,
             developmentApplication.scrapeDate,
-            developmentApplication.receivedDate
+            developmentApplication.receivedDate,
+            developmentApplication.legalDescription
         ], function(error, row) {
             if (error) {
                 console.error(error);
                 reject(error);
             } else {
                 if (this.changes > 0)
-                    console.log(`    Inserted: application \"${developmentApplication.applicationNumber}\" with address \"${developmentApplication.address}\", description \"${developmentApplication.description}\" and received date \"${developmentApplication.receivedDate}\" into the database.`);
+                    console.log(`    Inserted: application \"${developmentApplication.applicationNumber}\" with address \"${developmentApplication.address}\", description \"${developmentApplication.description}\", legal description \"${developmentApplication.legalDescription}\" and received date \"${developmentApplication.receivedDate}\" into the database.`);
                 else
-                    console.log(`    Skipped: application \"${developmentApplication.applicationNumber}\" with address \"${developmentApplication.address}\", description \"${developmentApplication.description}\" and received date \"${developmentApplication.receivedDate}\" because it was already present in the database.`);
+                    console.log(`    Skipped: application \"${developmentApplication.applicationNumber}\" with address \"${developmentApplication.address}\", description \"${developmentApplication.description}\", legal description \"${developmentApplication.legalDescription}\" and received date \"${developmentApplication.receivedDate}\" because it was already present in the database.`);
                 sqlStatement.finalize();  // releases any locks
                 resolve(row);
             }
@@ -397,6 +398,32 @@ function parseApplicationElements(elements: Element[], startElement: Element, in
         return undefined;
     }
 
+    // Get the legal description.
+
+    let legalElements = [];
+
+    let lot = getRightText(elements, "Lot", "Planning Conditions", "Section");
+    if (lot !== undefined)
+        legalElements.push(`Lot ${lot}`);
+
+    let section = getRightText(elements, "Section", "Planning Conditions", "Plan");
+    if (section !== undefined)
+        legalElements.push(`Section ${section}`);
+
+    let plan = getRightText(elements, "Plan", "Planning Conditions", "Property Street");
+    if (plan !== undefined)
+        legalElements.push(`Plan ${plan}`);
+
+    let title = getRightText(elements, "Title", "Planning Conditions", "Hundred");
+    if (title !== undefined)
+        legalElements.push(`Title ${title}`);
+
+    let hundred = getRightText(elements, "Hundred", "Planning Conditions", "Development Description");
+    if (hundred !== undefined)
+        legalElements.push(`Hundred ${hundred}`);
+
+    let legalDescription = legalElements.join(", ");
+
     // Two addresses are sometimes recorded in the same field.  This is done in a way which is
     // ambiguous (ie. it is not possible to reconstruct the original addresses perfectly).
     //
@@ -511,7 +538,8 @@ function parseApplicationElements(elements: Element[], startElement: Element, in
         informationUrl: informationUrl,
         commentUrl: CommentUrl,
         scrapeDate: moment().format("YYYY-MM-DD"),
-        receivedDate: (receivedDate !== undefined && receivedDate.isValid()) ? receivedDate.format("YYYY-MM-DD") : ""
+        receivedDate: (receivedDate !== undefined && receivedDate.isValid()) ? receivedDate.format("YYYY-MM-DD") : "",
+        legalDescription: legalDescription
     };
 }
 
