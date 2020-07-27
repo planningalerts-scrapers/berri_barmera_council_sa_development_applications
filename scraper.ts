@@ -17,7 +17,7 @@ import didYouMean, * as didyoumean from "didyoumean2";
 
 sqlite3.verbose();
 
-const DevelopmentApplicationsUrl = "http://www.berribarmera.sa.gov.au/page.aspx?u=375";
+const DevelopmentApplicationsUrl = "https://www.berribarmera.sa.gov.au/development-and-building/development-building/development-register";
 const CommentUrl = "mailto:bbc@bbc.sa.gov.au";
 
 declare const process: any;
@@ -60,7 +60,7 @@ async function insertRow(database, developmentApplication) {
                 console.error(error);
                 reject(error);
             } else {
-                console.log(`    Saved: application \"${developmentApplication.applicationNumber}\" with address \"${developmentApplication.address}\", description \"${developmentApplication.description}\", legal description \"${developmentApplication.legalDescription}\" and received date \"${developmentApplication.receivedDate}\" into the database.`);
+                console.log(`    Saved application \"${developmentApplication.applicationNumber}\" with address \"${developmentApplication.address}\", description \"${developmentApplication.description}\", legal description \"${developmentApplication.legalDescription}\" and received date \"${developmentApplication.receivedDate}\" to the database.`);
                 sqlStatement.finalize();  // releases any locks
                 resolve(row);
             }
@@ -878,12 +878,7 @@ async function main() {
         await sleep(2000 + getRandom(0, 5) * 1000);
         $ = cheerio.load(body);
 
-        let elements = []
-            .concat($("td.uContentListDesc p a").get())
-            .concat($("td.u6ListTD div.u6ListItem a").get())
-            .concat($("div.unityHtmlArticle p a").get());
-
-        for (let element of elements) {
+        for (let element of $("table.u6ListTable p a").get()) {
             let pdfUrl = new urlparser.URL(element.attribs.href, DevelopmentApplicationsUrl).href
             if (pdfUrl.toLowerCase().includes(".pdf"))
                 if (!pdfUrls.some(url => url === pdfUrl))
