@@ -858,32 +858,10 @@ async function main() {
     let $ = cheerio.load(body);
 
     let pdfUrls: string[] = [];
-    for (let element of $("div.u6ListItem a").get()) {
+    for (let element of $("table.u6ListTable td a").get()) {
         let pdfUrl = new urlparser.URL(element.attribs.href, DevelopmentApplicationsUrl).href
         if (!pdfUrls.some(url => url === pdfUrl))
-            pdfUrls.push(pdfUrl);
-    }
-
-    // Obtain the PDF URLs from the previous years' pages.
-
-    let yearUrls: string[] = [];
-    for (let element of $("div.unityHtmlArticle h4 a").get()) {
-        let pdfUrl = new urlparser.URL(element.attribs.href, DevelopmentApplicationsUrl).href
-        if (!yearUrls.some(url => url === pdfUrl))
-            yearUrls.push(pdfUrl);
-    }
-
-    for (let yearUrl of yearUrls) {
-        body = await request({ url: yearUrl, rejectUnauthorized: false, proxy: process.env.MORPH_PROXY });
-        await sleep(2000 + getRandom(0, 5) * 1000);
-        $ = cheerio.load(body);
-
-        for (let element of $("table.u6ListTable p a").get()) {
-            let pdfUrl = new urlparser.URL(element.attribs.href, DevelopmentApplicationsUrl).href
-            if (pdfUrl.toLowerCase().includes(".pdf"))
-                if (!pdfUrls.some(url => url === pdfUrl))
-                    pdfUrls.push(pdfUrl);
-        }
+            pdfUrls.push(pdfUrl);            
     }
 
     // Always parse the most recent PDF file and randomly select one other PDF file to parse.
