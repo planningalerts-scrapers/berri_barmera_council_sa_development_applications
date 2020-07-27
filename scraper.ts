@@ -861,7 +861,7 @@ async function main() {
     for (let element of $("table.u6ListTable td a").get()) {
         let pdfUrl = new urlparser.URL(element.attribs.href, DevelopmentApplicationsUrl).href
         if (!pdfUrls.some(url => url === pdfUrl))
-            pdfUrls.push(pdfUrl);
+            pdfUrls.push(pdfUrl);            
     }
 
     // Always parse the most recent PDF file and randomly select one other PDF file to parse.
